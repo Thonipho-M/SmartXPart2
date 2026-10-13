@@ -13,6 +13,7 @@ builder.Services.AddCors(options =>
         policy.WithOrigins("http://localhost:5025", "https://localhost:7169")
             .AllowAnyHeader()
             .AllowAnyMethod()));
+builder.Services.AddSingleton<RealTimeCommandStreamStore>();
 
 var app = builder.Build();
 
@@ -28,6 +29,8 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors("BlazorClient");
+
+var commandStream = app.Services.GetRequiredService<RealTimeCommandStreamStore>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -166,6 +169,13 @@ MockTelemetrySeeder.Seed(
     integerTelemetry,
     booleanTelemetry);
 
+commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
+    registeredSensors,
+    floatTelemetry,
+    integerTelemetry,
+    booleanTelemetry,
+    DateTime.UtcNow));
+
 var telemetry = app.MapGroup("/api/telemetry")
     .WithTags("Telemetry");
 
@@ -186,6 +196,15 @@ app.MapGet("/api/alerts", () => Results.Ok(TelemetryAlertEvaluator.Evaluate(
     DateTime.UtcNow)))
     .WithTags("Alerts")
     .WithName("GetTelemetryAlerts");
+
+var commandStreamEndpoints = app.MapGroup("/api/command-stream")
+    .WithTags("Real-Time Command Stream");
+
+commandStreamEndpoints.MapGet("/telemetry", () => Results.Ok(commandStream.GetLiveTelemetry()))
+    .WithName("GetLiveCommandStreamTelemetry");
+
+commandStreamEndpoints.MapGet("/critical-alerts", () => Results.Ok(commandStream.GetCriticalAlerts()))
+    .WithName("GetPriorityCriticalAlerts");
 
 // The three POST routes deliberately accept different generic packet types.
 telemetry.MapPost("/float", (TelemetryPacket<float> packet) =>
@@ -278,7 +297,16 @@ IResult StoreTelemetryPacket<T>(TelemetryPacket<T> packet, List<TelemetryPacket<
         return Results.NotFound(new { message = "Register the sensor before sending telemetry." });
     }
 
+    commandStream.EnqueueTelemetry(packet);
     packetList.Add(packet);
+
+    commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
+        registeredSensors,
+        floatTelemetry,
+        integerTelemetry,
+        booleanTelemetry,
+        DateTime.UtcNow));
+
     return Results.Created($"/api/telemetry/{packet.DeviceId}", packet);
 }
 
