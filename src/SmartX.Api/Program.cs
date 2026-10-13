@@ -14,6 +14,7 @@ builder.Services.AddCors(options =>
             .AllowAnyHeader()
             .AllowAnyMethod()));
 builder.Services.AddSingleton<RealTimeCommandStreamStore>();
+builder.Services.AddSingleton<LiveDeviceRegistry>();
 
 var app = builder.Build();
 
@@ -31,6 +32,7 @@ if (!app.Environment.IsDevelopment())
 app.UseCors("BlazorClient");
 
 var commandStream = app.Services.GetRequiredService<RealTimeCommandStreamStore>();
+var liveDeviceRegistry = app.Services.GetRequiredService<LiveDeviceRegistry>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -55,11 +57,10 @@ sensors.MapPost("/", (SensorProfile profile) =>
         });
     }
 
-    var sensorAlreadyExists = registeredSensors.Any(sensor =>
-        sensor.DeviceId.Equals(profile.DeviceId, StringComparison.OrdinalIgnoreCase) ||
+    var macAddressAlreadyExists = registeredSensors.Any(sensor =>
         sensor.MacAddress.Equals(profile.MacAddress, StringComparison.OrdinalIgnoreCase));
 
-    if (sensorAlreadyExists)
+    if (macAddressAlreadyExists || !liveDeviceRegistry.TryRegister(profile))
     {
         return Results.Conflict(new
         {
@@ -73,11 +74,19 @@ sensors.MapPost("/", (SensorProfile profile) =>
 })
 .WithName("RegisterSensor");
 
+// Uses the live device dictionary for immediate lookup by unique node identifier.
+sensors.MapGet("/lookup/{deviceId}", (string deviceId) =>
+{
+    return liveDeviceRegistry.TryGetDevice(deviceId, out var sensor)
+        ? Results.Ok(sensor)
+        : Results.NotFound(new { message = "The requested sensor is not registered." });
+})
+.WithName("GetLiveDeviceById");
+
 // POST /api/sensors/{deviceId}/attachments stores a multipart attachment for one sensor.
 sensors.MapPost("/{deviceId}/attachments", async (string deviceId, HttpRequest request) =>
 {
-    var sensorExists = registeredSensors.Any(sensor =>
-        sensor.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+    var sensorExists = liveDeviceRegistry.ContainsDevice(deviceId);
 
     if (!sensorExists)
     {
@@ -131,8 +140,7 @@ sensors.MapPost("/{deviceId}/attachments", async (string deviceId, HttpRequest r
 // GET /api/sensors/{deviceId}/attachments lists files currently linked to a sensor.
 sensors.MapGet("/{deviceId}/attachments", (string deviceId) =>
 {
-    var sensorExists = registeredSensors.Any(sensor =>
-        sensor.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+    var sensorExists = liveDeviceRegistry.ContainsDevice(deviceId);
 
     if (!sensorExists)
     {
@@ -168,6 +176,8 @@ MockTelemetrySeeder.Seed(
     floatTelemetry,
     integerTelemetry,
     booleanTelemetry);
+
+liveDeviceRegistry.LoadExistingDevices(registeredSensors);
 
 commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
     registeredSensors,
@@ -262,8 +272,7 @@ telemetry.MapGet("/", () => Results.Ok(new TelemetryHistory
 // GET /api/telemetry/{deviceId} returns the history for one sensor.
 telemetry.MapGet("/{deviceId}", (string deviceId) =>
 {
-    var sensorExists = registeredSensors.Any(sensor =>
-        sensor.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+    var sensorExists = liveDeviceRegistry.ContainsDevice(deviceId);
 
     if (!sensorExists)
     {
@@ -289,8 +298,7 @@ IResult StoreTelemetryPacket<T>(TelemetryPacket<T> packet, List<TelemetryPacket<
         return Results.BadRequest(new { message = "Device ID and metric name are required." });
     }
 
-    var sensorExists = registeredSensors.Any(sensor =>
-        sensor.DeviceId.Equals(packet.DeviceId, StringComparison.OrdinalIgnoreCase));
+    var sensorExists = liveDeviceRegistry.ContainsDevice(packet.DeviceId);
 
     if (!sensorExists)
     {
