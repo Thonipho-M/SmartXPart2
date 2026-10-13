@@ -36,6 +36,40 @@ public class SensorApiClient(HttpClient httpClient)
         return await httpClient.GetFromJsonAsync<List<TelemetryAlert>>("api/alerts", JsonOptions) ?? [];
     }
 
+    public async Task<List<CommandStreamTelemetry>> GetLiveCommandStreamAsync()
+    {
+        return await httpClient.GetFromJsonAsync<List<CommandStreamTelemetry>>(
+            "api/command-stream/telemetry", JsonOptions) ?? [];
+    }
+
+    public async Task<List<TelemetryAlert>> GetPriorityCriticalAlertsAsync()
+    {
+        return await httpClient.GetFromJsonAsync<List<TelemetryAlert>>(
+            "api/command-stream/critical-alerts", JsonOptions) ?? [];
+    }
+
+    public async Task<List<CommandStreamTelemetry>> GetSortedCommandHistoryAsync(string deviceId)
+    {
+        return await httpClient.GetFromJsonAsync<List<CommandStreamTelemetry>>(
+            $"api/command-stream/history/{Uri.EscapeDataString(deviceId)}", JsonOptions) ?? [];
+    }
+
+    public async Task<List<ManualOverrideCommand>> GetManualOverrideHistoryAsync()
+    {
+        return await httpClient.GetFromJsonAsync<List<ManualOverrideCommand>>(
+            "api/command-stream/commands", JsonOptions) ?? [];
+    }
+
+    public Task<HttpResponseMessage> IssueManualOverrideAsync(ManualOverrideRequest request)
+    {
+        return httpClient.PostAsJsonAsync("api/command-stream/commands", request, JsonOptions);
+    }
+
+    public async Task<HttpResponseMessage> UndoLatestManualOverrideAsync()
+    {
+        return await httpClient.PostAsync("api/command-stream/commands/undo", null);
+    }
+
     public async Task<HttpResponseMessage> UploadAttachmentAsync(
         string deviceId,
         string fileName,
