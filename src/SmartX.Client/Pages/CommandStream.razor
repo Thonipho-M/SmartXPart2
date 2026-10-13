@@ -1,0 +1,354 @@
+@page "/command-stream"
+@inject SmartX.Client.Services.SensorApiClient SensorApi
+@* UI layout created with ChatGPT assistance and reviewed by Thonipho Mavhungu. *@
+
+<PageTitle>Real-Time Command Stream</PageTitle>
+
+<div class="py-4">
+    <p class="text-uppercase text-primary fw-semibold mb-2">Part 2 workspace</p>
+    <h1>Real-Time Command Stream and History</h1>
+    <p class="lead text-secondary">Monitor incoming telemetry, focus on active device issues, and issue reversible actuator commands.</p>
+
+    @if (message is not null)
+    {
+        <div class="alert @messageStyle" role="status">@message</div>
+    }
+
+    <section class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
+                <div>
+                    <h2 class="h4 mb-1">Stream controls</h2>
+                    <p class="text-secondary mb-0">Filter registered devices by operating category or whether they have an active alert.</p>
+                </div>
+                <button class="btn btn-outline-primary" @onclick="LoadDashboardAsync">Refresh stream</button>
+            </div>
+
+            <div class="row g-3 align-items-end">
+                <div class="col-md-6">
+                    <label class="form-label" for="categoryFilter">Operational category</label>
+                    <InputSelect id="categoryFilter" class="form-select" @bind-Value="selectedCategory">
+                        <option value="">All categories</option>
+                        @foreach (var category in Enum.GetValues<SensorCategory>())
+                        {
+                            <option value="@category">@category</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-check mb-2">
+                        <InputCheckbox id="activeAlertFilter" class="form-check-input" @bind-Value="activeAlertsOnly" />
+                        <label class="form-check-label" for="activeAlertFilter">Show devices with active alerts only</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-responsive mt-3">
+                <table class="table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Device</th>
+                            <th>Category</th>
+                            <th>Location</th>
+                            <th>Alert state</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var sensor in FilteredSensors)
+                        {
+                            <tr>
+                                <td><button class="btn btn-link p-0" @onclick="() => SelectDeviceAsync(sensor.DeviceId)">@sensor.DeviceId</button></td>
+                                <td>@sensor.Category</td>
+                                <td>@sensor.DeploymentLocation</td>
+                                <td>
+                                    @if (HasActiveAlert(sensor.DeviceId))
+                                    {
+                                        <span class="badge text-bg-danger">Active alert</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-success">Normal</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <div class="row g-4">
+        <div class="col-lg-7">
+            <section class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h2 class="h4 mb-0">Incoming telemetry</h2>
+                        <span class="badge text-bg-primary">@liveTelemetry.Count recent packets</span>
+                    </div>
+
+                    @if (liveTelemetry.Count == 0)
+                    {
+                        <p class="text-secondary mb-0">No new telemetry has arrived since the API started.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead><tr><th>Time</th><th>Device</th><th>Metric</th><th>Value</th></tr></thead>
+                                <tbody>
+                                    @foreach (var packet in liveTelemetry.OrderByDescending(packet => packet.RecordedAtUtc))
+                                    {
+                                        <tr>
+                                            <td>@FormatTimestamp(packet.RecordedAtUtc)</td>
+                                            <td>@packet.DeviceId</td>
+                                            <td>@packet.MetricName</td>
+                                            <td>@packet.Value</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </section>
+        </div>
+
+        <div class="col-lg-5">
+            <section class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h2 class="h4">Critical alerts</h2>
+                    @if (criticalAlerts.Count == 0)
+                    {
+                        <p class="text-secondary mb-0">No critical alerts are waiting in the priority queue.</p>
+                    }
+                    else
+                    {
+                        @foreach (var alert in criticalAlerts)
+                        {
+                            <div class="alert alert-danger py-2">
+                                <strong>@alert.DeviceId</strong>
+                                <div>@alert.Message</div>
+                                <small>@alert.SuggestedAction</small>
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-lg-5">
+            <section class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h2 class="h4">Manual override</h2>
+                    <p class="text-secondary">Commands are limited to actuator devices and can be undone in reverse order.</p>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="overrideDevice">Actuator device</label>
+                        <InputSelect id="overrideDevice" class="form-select" @bind-Value="newOverride.DeviceId">
+                            <option value="">Choose an actuator</option>
+                            @foreach (var sensor in registeredSensors.Where(sensor => sensor.Category == SensorCategory.Actuator))
+                            {
+                                <option value="@sensor.DeviceId">@sensor.DeviceId - @sensor.DeploymentLocation</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="overrideCommand">Command</label>
+                            <InputSelect id="overrideCommand" class="form-select" @bind-Value="newOverride.Command">
+                                <option value="Open valve">Open valve</option>
+                                <option value="Close valve">Close valve</option>
+                                <option value="Toggle smart relay">Toggle smart relay</option>
+                            </InputSelect>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="targetState">Target state</label>
+                            <InputSelect id="targetState" class="form-select" @bind-Value="newOverride.TargetState">
+                                <option value="On">On</option>
+                                <option value="Off">Off</option>
+                                <option value="Open">Open</option>
+                                <option value="Closed">Closed</option>
+                            </InputSelect>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 mt-3">
+                        <button class="btn btn-primary" @onclick="IssueOverrideAsync">Issue command</button>
+                        <button class="btn btn-outline-secondary" @onclick="UndoLatestOverrideAsync" disabled="@(overrideHistory.Count == 0)">Undo latest</button>
+                    </div>
+
+                    @if (overrideHistory.Count > 0)
+                    {
+                        <p class="small text-secondary mt-3 mb-0">Ready to undo: @overrideHistory[0].Command for @overrideHistory[0].DeviceId.</p>
+                    }
+                </div>
+            </section>
+        </div>
+
+        <div class="col-lg-7">
+            <section class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
+                        <div>
+                            <h2 class="h4 mb-1">Timestamp-sorted history</h2>
+                            <p class="text-secondary mb-0">@selectedDeviceId</p>
+                        </div>
+                        <InputSelect class="form-select w-auto" @bind-Value="selectedDeviceId">
+                            @foreach (var sensor in registeredSensors)
+                            {
+                                <option value="@sensor.DeviceId">@sensor.DeviceId</option>
+                            }
+                        </InputSelect>
+                        <button class="btn btn-outline-primary" @onclick="LoadSelectedHistoryAsync" disabled="@string.IsNullOrWhiteSpace(selectedDeviceId)">Load history</button>
+                    </div>
+
+                    @if (selectedHistory.Count == 0)
+                    {
+                        <p class="text-secondary mb-0">Choose a device and load its history.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead><tr><th>Timestamp</th><th>Metric</th><th>Value</th><th>Type</th></tr></thead>
+                                <tbody>
+                                    @foreach (var packet in selectedHistory)
+                                    {
+                                        <tr><td>@FormatTimestamp(packet.RecordedAtUtc)</td><td>@packet.MetricName</td><td>@packet.Value</td><td>@packet.ValueType</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<SensorProfile> registeredSensors = [];
+    private List<CommandStreamTelemetry> liveTelemetry = [];
+    private List<TelemetryAlert> activeAlerts = [];
+    private List<TelemetryAlert> criticalAlerts = [];
+    private List<ManualOverrideCommand> overrideHistory = [];
+    private List<CommandStreamTelemetry> selectedHistory = [];
+    private ManualOverrideRequest newOverride = new() { Command = "Open valve", TargetState = "On" };
+    private string selectedCategory = string.Empty;
+    private bool activeAlertsOnly;
+    private string selectedDeviceId = string.Empty;
+    private string? message;
+    private string messageStyle = "alert-info";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboardAsync();
+    }
+
+    private IEnumerable<SensorProfile> FilteredSensors => registeredSensors.Where(sensor =>
+        (string.IsNullOrWhiteSpace(selectedCategory) || sensor.Category.ToString() == selectedCategory) &&
+        (!activeAlertsOnly || HasActiveAlert(sensor.DeviceId)));
+
+    private bool HasActiveAlert(string deviceId) => activeAlerts.Any(alert =>
+        alert.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+
+    private async Task LoadDashboardAsync()
+    {
+        try
+        {
+            registeredSensors = await SensorApi.GetSensorsAsync();
+            liveTelemetry = await SensorApi.GetLiveCommandStreamAsync();
+            activeAlerts = await SensorApi.GetAlertsAsync();
+            criticalAlerts = await SensorApi.GetPriorityCriticalAlertsAsync();
+            overrideHistory = await SensorApi.GetManualOverrideHistoryAsync();
+
+            if (string.IsNullOrWhiteSpace(selectedDeviceId) && registeredSensors.Count > 0)
+            {
+                selectedDeviceId = registeredSensors[0].DeviceId;
+                await LoadSelectedHistoryAsync();
+            }
+        }
+        catch (HttpRequestException)
+        {
+            message = "The API is not running. Start SmartX.Api, then refresh this page.";
+            messageStyle = "alert-warning";
+        }
+    }
+
+    private async Task SelectDeviceAsync(string deviceId)
+    {
+        selectedDeviceId = deviceId;
+        await LoadSelectedHistoryAsync();
+    }
+
+    private async Task LoadSelectedHistoryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(selectedDeviceId))
+        {
+            return;
+        }
+
+        try
+        {
+            selectedHistory = await SensorApi.GetSortedCommandHistoryAsync(selectedDeviceId);
+        }
+        catch (HttpRequestException)
+        {
+            message = "The API is not running. Start SmartX.Api, then try again.";
+            messageStyle = "alert-warning";
+        }
+    }
+
+    private async Task IssueOverrideAsync()
+    {
+        try
+        {
+            var response = await SensorApi.IssueManualOverrideAsync(newOverride);
+            if (!response.IsSuccessStatusCode)
+            {
+                message = "Choose an actuator, then provide a valid command and target state.";
+                messageStyle = "alert-danger";
+                return;
+            }
+
+            message = $"{newOverride.Command} was sent to {newOverride.DeviceId}.";
+            messageStyle = "alert-success";
+            await LoadDashboardAsync();
+        }
+        catch (HttpRequestException)
+        {
+            message = "The API is not running. Start SmartX.Api, then try again.";
+            messageStyle = "alert-warning";
+        }
+    }
+
+    private async Task UndoLatestOverrideAsync()
+    {
+        try
+        {
+            var response = await SensorApi.UndoLatestManualOverrideAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                message = "There is no command available to undo.";
+                messageStyle = "alert-warning";
+                return;
+            }
+
+            message = "The latest manual override was undone.";
+            messageStyle = "alert-success";
+            await LoadDashboardAsync();
+        }
+        catch (HttpRequestException)
+        {
+            message = "The API is not running. Start SmartX.Api, then try again.";
+            messageStyle = "alert-warning";
+        }
+    }
+
+    private static string FormatTimestamp(DateTime timestampUtc)
+    {
+        return timestampUtc.ToLocalTime().ToString("dd MMM yyyy, HH:mm:ss");
+    }
+}
