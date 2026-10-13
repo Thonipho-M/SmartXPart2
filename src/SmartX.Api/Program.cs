@@ -16,6 +16,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<RealTimeCommandStreamStore>();
 builder.Services.AddSingleton<LiveDeviceRegistry>();
 builder.Services.AddSingleton<SortedTelemetryHistoryStore>();
+builder.Services.AddSingleton<ManualOverrideCommandStore>();
 
 var app = builder.Build();
 
@@ -35,6 +36,7 @@ app.UseCors("BlazorClient");
 var commandStream = app.Services.GetRequiredService<RealTimeCommandStreamStore>();
 var liveDeviceRegistry = app.Services.GetRequiredService<LiveDeviceRegistry>();
 var sortedTelemetryHistory = app.Services.GetRequiredService<SortedTelemetryHistoryStore>();
+var manualOverrides = app.Services.GetRequiredService<ManualOverrideCommandStore>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -243,6 +245,41 @@ commandStreamEndpoints.MapGet("/history/{deviceId}", (string deviceId) =>
     return Results.Ok(sortedTelemetryHistory.GetHistoryForDevice(deviceId));
 })
 .WithName("GetSortedCommandStreamHistory");
+
+commandStreamEndpoints.MapGet("/commands", () => Results.Ok(manualOverrides.GetUndoHistory()))
+    .WithName("GetManualOverrideHistory");
+
+commandStreamEndpoints.MapPost("/commands", (ManualOverrideRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.DeviceId) ||
+        string.IsNullOrWhiteSpace(request.Command) ||
+        string.IsNullOrWhiteSpace(request.TargetState))
+    {
+        return Results.BadRequest(new { message = "Device ID, command and target state are required." });
+    }
+
+    if (!liveDeviceRegistry.TryGetDevice(request.DeviceId, out var sensor))
+    {
+        return Results.NotFound(new { message = "The requested sensor is not registered." });
+    }
+
+    if (sensor!.Category != SensorCategory.Actuator)
+    {
+        return Results.BadRequest(new { message = "Manual overrides are only available for actuator devices." });
+    }
+
+    var issuedCommand = manualOverrides.Issue(request);
+    return Results.Created($"/api/command-stream/commands/{issuedCommand.CommandId}", issuedCommand);
+})
+.WithName("IssueManualOverride");
+
+commandStreamEndpoints.MapPost("/commands/undo", () =>
+{
+    return manualOverrides.TryUndoLatest(out var undoResult)
+        ? Results.Ok(undoResult)
+        : Results.NotFound(new { message = "There is no manual override command to undo." });
+})
+.WithName("UndoLatestManualOverride");
 
 // The three POST routes deliberately accept different generic packet types.
 telemetry.MapPost("/float", (TelemetryPacket<float> packet) =>
