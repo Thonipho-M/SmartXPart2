@@ -15,6 +15,7 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod()));
 builder.Services.AddSingleton<RealTimeCommandStreamStore>();
 builder.Services.AddSingleton<LiveDeviceRegistry>();
+builder.Services.AddSingleton<SortedTelemetryHistoryStore>();
 
 var app = builder.Build();
 
@@ -33,6 +34,7 @@ app.UseCors("BlazorClient");
 
 var commandStream = app.Services.GetRequiredService<RealTimeCommandStreamStore>();
 var liveDeviceRegistry = app.Services.GetRequiredService<LiveDeviceRegistry>();
+var sortedTelemetryHistory = app.Services.GetRequiredService<SortedTelemetryHistoryStore>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -179,6 +181,21 @@ MockTelemetrySeeder.Seed(
 
 liveDeviceRegistry.LoadExistingDevices(registeredSensors);
 
+foreach (var packet in floatTelemetry)
+{
+    sortedTelemetryHistory.Add(packet);
+}
+
+foreach (var packet in integerTelemetry)
+{
+    sortedTelemetryHistory.Add(packet);
+}
+
+foreach (var packet in booleanTelemetry)
+{
+    sortedTelemetryHistory.Add(packet);
+}
+
 commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
     registeredSensors,
     floatTelemetry,
@@ -215,6 +232,17 @@ commandStreamEndpoints.MapGet("/telemetry", () => Results.Ok(commandStream.GetLi
 
 commandStreamEndpoints.MapGet("/critical-alerts", () => Results.Ok(commandStream.GetCriticalAlerts()))
     .WithName("GetPriorityCriticalAlerts");
+
+commandStreamEndpoints.MapGet("/history/{deviceId}", (string deviceId) =>
+{
+    if (!liveDeviceRegistry.ContainsDevice(deviceId))
+    {
+        return Results.NotFound(new { message = "The requested sensor is not registered." });
+    }
+
+    return Results.Ok(sortedTelemetryHistory.GetHistoryForDevice(deviceId));
+})
+.WithName("GetSortedCommandStreamHistory");
 
 // The three POST routes deliberately accept different generic packet types.
 telemetry.MapPost("/float", (TelemetryPacket<float> packet) =>
@@ -306,6 +334,7 @@ IResult StoreTelemetryPacket<T>(TelemetryPacket<T> packet, List<TelemetryPacket<
     }
 
     commandStream.EnqueueTelemetry(packet);
+    sortedTelemetryHistory.Add(packet);
     packetList.Add(packet);
 
     commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
