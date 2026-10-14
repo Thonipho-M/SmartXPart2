@@ -1,5 +1,6 @@
 @page "/command-stream"
 @inject SmartX.Client.Services.SensorApiClient SensorApi
+@implements IAsyncDisposable
 @* UI layout created with ChatGPT assistance and reviewed by Thonipho Mavhungu. *@
 
 <PageTitle>Real-Time Command Stream</PageTitle>
@@ -21,7 +22,10 @@
                     <h2 class="h4 mb-1">Stream controls</h2>
                     <p class="text-secondary mb-0">Filter registered devices by operating category or whether they have an active alert.</p>
                 </div>
-                <button class="btn btn-outline-primary" @onclick="LoadDashboardAsync">Refresh stream</button>
+                <div class="text-end">
+                    <button class="btn btn-outline-primary" @onclick="() => LoadDashboardAsync()">Refresh stream</button>
+                    <small class="d-block text-secondary mt-1">Auto-refreshing every 5 seconds</small>
+                </div>
             </div>
 
             <div class="row g-3 align-items-end">
@@ -241,10 +245,13 @@
     private string selectedDeviceId = string.Empty;
     private string? message;
     private string messageStyle = "alert-info";
+    private readonly CancellationTokenSource refreshCancellation = new();
+    private Task? autoRefreshTask;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadDashboardAsync();
+        autoRefreshTask = RefreshStreamContinuouslyAsync(refreshCancellation.Token);
     }
 
     private IEnumerable<SensorProfile> FilteredSensors => registeredSensors.Where(sensor =>
@@ -254,7 +261,7 @@
     private bool HasActiveAlert(string deviceId) => activeAlerts.Any(alert =>
         alert.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
 
-    private async Task LoadDashboardAsync()
+    private async Task LoadDashboardAsync(bool showConnectionWarning = true)
     {
         try
         {
@@ -272,8 +279,32 @@
         }
         catch (HttpRequestException)
         {
-            message = "The API is not running. Start SmartX.Api, then refresh this page.";
-            messageStyle = "alert-warning";
+            if (showConnectionWarning)
+            {
+                message = "The API is not running. Start SmartX.Api, then refresh this page.";
+                messageStyle = "alert-warning";
+            }
+        }
+    }
+
+    private async Task RefreshStreamContinuouslyAsync(CancellationToken cancellationToken)
+    {
+        using var refreshTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            while (await refreshTimer.WaitForNextTickAsync(cancellationToken))
+            {
+                await InvokeAsync(async () =>
+                {
+                    await LoadDashboardAsync(showConnectionWarning: false);
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The page was closed or the user navigated away from the command stream.
         }
     }
 
@@ -350,5 +381,17 @@
     private static string FormatTimestamp(DateTime timestampUtc)
     {
         return timestampUtc.ToLocalTime().ToString("dd MMM yyyy, HH:mm:ss");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await refreshCancellation.CancelAsync();
+
+        if (autoRefreshTask is not null)
+        {
+            await autoRefreshTask;
+        }
+
+        refreshCancellation.Dispose();
     }
 }
