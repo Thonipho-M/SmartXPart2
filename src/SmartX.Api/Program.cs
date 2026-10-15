@@ -17,6 +17,7 @@ builder.Services.AddSingleton<RealTimeCommandStreamStore>();
 builder.Services.AddSingleton<LiveDeviceRegistry>();
 builder.Services.AddSingleton<SortedTelemetryHistoryStore>();
 builder.Services.AddSingleton<ManualOverrideCommandStore>();
+builder.Services.AddSingleton<OperatorActivityTracker>();
 
 var app = builder.Build();
 
@@ -37,6 +38,7 @@ var commandStream = app.Services.GetRequiredService<RealTimeCommandStreamStore>(
 var liveDeviceRegistry = app.Services.GetRequiredService<LiveDeviceRegistry>();
 var sortedTelemetryHistory = app.Services.GetRequiredService<SortedTelemetryHistoryStore>();
 var manualOverrides = app.Services.GetRequiredService<ManualOverrideCommandStore>();
+var activityTracker = app.Services.GetRequiredService<OperatorActivityTracker>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -81,9 +83,13 @@ sensors.MapPost("/", (SensorProfile profile) =>
 // Uses the live device dictionary for immediate lookup by unique node identifier.
 sensors.MapGet("/lookup/{deviceId}", (string deviceId) =>
 {
-    return liveDeviceRegistry.TryGetDevice(deviceId, out var sensor)
-        ? Results.Ok(sensor)
-        : Results.NotFound(new { message = "The requested sensor is not registered." });
+    if (!liveDeviceRegistry.TryGetDevice(deviceId, out var sensor))
+    {
+        return Results.NotFound(new { message = "The requested sensor is not registered." });
+    }
+
+    activityTracker.RecordSearch(deviceId);
+    return Results.Ok(sensor);
 })
 .WithName("GetLiveDeviceById");
 
@@ -229,6 +235,24 @@ app.MapGet("/api/alerts", () => Results.Ok(TelemetryAlertEvaluator.Evaluate(
 var commandStreamEndpoints = app.MapGroup("/api/command-stream")
     .WithTags("Real-Time Command Stream");
 
+var recommendationEndpoints = app.MapGroup("/api/recommendations")
+    .WithTags("Predictive Recommendations");
+
+recommendationEndpoints.MapPost("/searches/{deviceId}", (string deviceId) =>
+{
+    if (!liveDeviceRegistry.ContainsDevice(deviceId))
+    {
+        return Results.NotFound(new { message = "The requested sensor is not registered." });
+    }
+
+    activityTracker.RecordSearch(deviceId);
+    return Results.NoContent();
+})
+.WithName("RecordDeviceSearch");
+
+recommendationEndpoints.MapGet("/activity", () => Results.Ok(activityTracker.GetRecentActivities()))
+    .WithName("GetRecentOperatorActivity");
+
 commandStreamEndpoints.MapGet("/telemetry", () => Results.Ok(commandStream.GetLiveTelemetry()))
     .WithName("GetLiveCommandStreamTelemetry");
 
@@ -269,6 +293,7 @@ commandStreamEndpoints.MapPost("/commands", (ManualOverrideRequest request) =>
     }
 
     var issuedCommand = manualOverrides.Issue(request);
+    activityTracker.RecordManualOverride(issuedCommand);
     return Results.Created($"/api/command-stream/commands/{issuedCommand.CommandId}", issuedCommand);
 })
 .WithName("IssueManualOverride");
