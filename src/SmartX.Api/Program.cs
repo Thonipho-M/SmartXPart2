@@ -18,6 +18,7 @@ builder.Services.AddSingleton<LiveDeviceRegistry>();
 builder.Services.AddSingleton<SortedTelemetryHistoryStore>();
 builder.Services.AddSingleton<ManualOverrideCommandStore>();
 builder.Services.AddSingleton<OperatorActivityTracker>();
+builder.Services.AddSingleton<PredictiveRecommendationEngine>();
 
 var app = builder.Build();
 
@@ -39,6 +40,7 @@ var liveDeviceRegistry = app.Services.GetRequiredService<LiveDeviceRegistry>();
 var sortedTelemetryHistory = app.Services.GetRequiredService<SortedTelemetryHistoryStore>();
 var manualOverrides = app.Services.GetRequiredService<ManualOverrideCommandStore>();
 var activityTracker = app.Services.GetRequiredService<OperatorActivityTracker>();
+var recommendationEngine = app.Services.GetRequiredService<PredictiveRecommendationEngine>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -252,6 +254,19 @@ recommendationEndpoints.MapPost("/searches/{deviceId}", (string deviceId) =>
 
 recommendationEndpoints.MapGet("/activity", () => Results.Ok(activityTracker.GetRecentActivities()))
     .WithName("GetRecentOperatorActivity");
+
+recommendationEndpoints.MapGet("/insights", () =>
+{
+    var activeAlerts = TelemetryAlertEvaluator.Evaluate(
+        registeredSensors,
+        floatTelemetry,
+        integerTelemetry,
+        booleanTelemetry,
+        DateTime.UtcNow);
+
+    return Results.Ok(recommendationEngine.Generate(activeAlerts, registeredSensors));
+})
+.WithName("GetPredictiveInsights");
 
 commandStreamEndpoints.MapGet("/telemetry", () => Results.Ok(commandStream.GetLiveTelemetry()))
     .WithName("GetLiveCommandStreamTelemetry");
