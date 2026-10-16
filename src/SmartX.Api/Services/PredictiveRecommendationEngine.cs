@@ -19,15 +19,18 @@ public sealed class PredictiveRecommendationEngine(OperatorActivityTracker activ
                 continue;
             }
 
-            var suggestedAction = GetAlertAction(alert, sensorList);
+            var suggestedControl = GetSuggestedControl(alert, sensorList);
             insights.Add(new PredictiveInsight
             {
                 DeviceId = alert.DeviceId,
                 Title = $"Immediate attention: {alert.MetricName}",
                 Message = alert.Message,
-                SuggestedAction = suggestedAction,
+                SuggestedAction = suggestedControl?.Description ?? alert.SuggestedAction,
                 Confidence = "High",
-                Evidence = "A current critical telemetry alert triggered this recommendation."
+                Evidence = "A current critical telemetry alert triggered this recommendation.",
+                RecommendedDeviceId = suggestedControl?.DeviceId,
+                RecommendedCommand = suggestedControl?.Command,
+                RecommendedTargetState = suggestedControl?.TargetState
             });
 
             foreach (var relatedDeviceId in activityTracker.GetFrequentFollowUps(alert.DeviceId).Take(2))
@@ -55,16 +58,42 @@ public sealed class PredictiveRecommendationEngine(OperatorActivityTracker activ
         return insights;
     }
 
-    private static string GetAlertAction(TelemetryAlert alert, List<SensorProfile> sensors)
+    private static SuggestedControl? GetSuggestedControl(TelemetryAlert alert, List<SensorProfile> sensors)
     {
         if (alert.MetricName == "Soil Moisture")
         {
-            var actuator = sensors.FirstOrDefault(sensor => sensor.Category == SensorCategory.Actuator);
+            var actuator = sensors.FirstOrDefault(sensor => sensor.DeviceId == "FARM-VALVE-01" &&
+                sensor.Category == SensorCategory.Actuator);
+
             return actuator is null
-                ? alert.SuggestedAction
-                : $"Review {actuator.DeviceId}; if it is safe to do so, issue an Open valve manual override.";
+                ? null
+                : new SuggestedControl(
+                    actuator.DeviceId,
+                    "Open valve",
+                    "Open",
+                    $"Open {actuator.DeviceId} to restore irrigation, if it is safe to do so.");
         }
 
-        return alert.SuggestedAction;
+        if (alert.MetricName == "Power Usage Watts")
+        {
+            var actuator = sensors.FirstOrDefault(sensor => sensor.DeviceId == "GRID-RELAY-01" &&
+                sensor.Category == SensorCategory.Actuator);
+
+            return actuator is null
+                ? null
+                : new SuggestedControl(
+                    actuator.DeviceId,
+                    "Toggle smart relay",
+                    "Off",
+                    $"Turn off {actuator.DeviceId} to reduce the power load, if it is safe to do so.");
+        }
+
+        return null;
     }
+
+    private sealed record SuggestedControl(
+        string DeviceId,
+        string Command,
+        string TargetState,
+        string Description);
 }
