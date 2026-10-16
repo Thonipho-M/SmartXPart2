@@ -48,6 +48,17 @@ public class SensorApiClient(HttpClient httpClient)
             "api/command-stream/critical-alerts", JsonOptions) ?? [];
     }
 
+    public async Task<List<PredictiveInsight>> GetPredictiveInsightsAsync()
+    {
+        return await httpClient.GetFromJsonAsync<List<PredictiveInsight>>(
+            "api/recommendations/insights", JsonOptions) ?? [];
+    }
+
+    public Task<HttpResponseMessage> RecordDeviceSearchAsync(string deviceId)
+    {
+        return httpClient.PostAsync($"api/recommendations/searches/{Uri.EscapeDataString(deviceId)}", null);
+    }
+
     public async Task<List<CommandStreamTelemetry>> GetSortedCommandHistoryAsync(string deviceId)
     {
         return await httpClient.GetFromJsonAsync<List<CommandStreamTelemetry>>(
