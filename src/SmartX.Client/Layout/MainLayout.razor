@@ -18,13 +18,16 @@
                 <section class="help-panel mb-4" aria-label="How to use Smart-X">
                     <div class="d-flex justify-content-between align-items-start gap-3">
                         <div>
-                            <h2 class="h5">How to use Smart-X Part 1</h2>
+                            <h2 class="h5">How to use Smart-X</h2>
                             <ol class="mb-0 ps-3">
                                 <li>Open <strong>Telemetry</strong> from the gateway.</li>
                                 <li>Register a sensor using its device ID, MAC address, location and category.</li>
                                 <li>Review proactive alerts first, then select <strong>Investigate</strong> to open the affected sensor history.</li>
                                 <li>Choose a sensor and filter by a metric to reduce the readings displayed.</li>
                                 <li>Select a reading to view its exact value, source device and timestamp.</li>
+                                <li>Open <strong>Command stream</strong> to filter live devices, view current telemetry, and review critical alerts.</li>
+                                <li>Read <strong>Automated Insights</strong> for suggested actions and the evidence that produced them.</li>
+                                <li>Use <strong>Manual override</strong> only for actuator devices; select <strong>Undo latest</strong> to reverse the last command.</li>
                             </ol>
                         </div>
                         <button class="btn-close" aria-label="Close help" @onclick="ToggleHelp"></button>
