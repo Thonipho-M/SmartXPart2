@@ -13,8 +13,12 @@ public static class TelemetryAlertEvaluator
     {
         var alerts = new List<TelemetryAlert>();
 
-        foreach (var packet in floatPackets.Where(packet =>
-                     packet.MetricName == "Soil Moisture" && packet.Value < 35))
+        // Only the newest value for each device and metric represents its current alert state.
+        foreach (var packet in floatPackets
+                     .Where(packet => packet.MetricName == "Soil Moisture")
+                     .GroupBy(packet => new { packet.DeviceId, packet.MetricName })
+                     .Select(group => group.MaxBy(packet => packet.RecordedAtUtc)!)
+                     .Where(packet => packet.Value < 35))
         {
             alerts.Add(new TelemetryAlert
             {
@@ -28,9 +32,11 @@ public static class TelemetryAlertEvaluator
         }
 
         var powerSpikeThreshold = new PowerReading(1000);
-        foreach (var packet in integerPackets.Where(packet =>
-                     packet.MetricName == "Power Usage Watts" &&
-                     new PowerReading(packet.Value) > powerSpikeThreshold))
+        foreach (var packet in integerPackets
+                     .Where(packet => packet.MetricName == "Power Usage Watts")
+                     .GroupBy(packet => new { packet.DeviceId, packet.MetricName })
+                     .Select(group => group.MaxBy(packet => packet.RecordedAtUtc)!)
+                     .Where(packet => new PowerReading(packet.Value) > powerSpikeThreshold))
         {
             alerts.Add(new TelemetryAlert
             {

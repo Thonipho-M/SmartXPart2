@@ -130,10 +130,19 @@
                     {
                         @foreach (var alert in criticalAlerts)
                         {
+                            var recommendedControl = predictiveInsights.FirstOrDefault(insight =>
+                                insight.DeviceId == alert.DeviceId &&
+                                !string.IsNullOrWhiteSpace(insight.RecommendedDeviceId));
                             <div class="alert alert-danger py-2">
                                 <strong>@alert.DeviceId</strong>
                                 <div>@alert.Message</div>
                                 <small>@alert.SuggestedAction</small>
+                                @if (recommendedControl is not null)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger d-block mt-2" @onclick="() => ApplySuggestedOverrideAsync(recommendedControl)">
+                                        Apply suggested control: @recommendedControl.RecommendedDeviceId
+                                    </button>
+                                }
                             </div>
                         }
                     }
@@ -170,7 +179,15 @@
                                 <p class="mb-2">@insight.Message</p>
                                 <p class="mb-2"><strong>Suggested action:</strong> @insight.SuggestedAction</p>
                                 <p class="small text-secondary mb-3"><strong>Evidence:</strong> @insight.Evidence</p>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="() => InvestigateInsightAsync(insight)">Review device</button>
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => InvestigateInsightAsync(insight)">Review device</button>
+                                    @if (!string.IsNullOrWhiteSpace(insight.RecommendedDeviceId))
+                                    {
+                                        <button class="btn btn-sm btn-success" @onclick="() => ApplySuggestedOverrideAsync(insight)">
+                                            Apply suggested control
+                                        </button>
+                                    }
+                                </div>
                             </article>
                         </div>
                     }
@@ -185,6 +202,7 @@
                 <div class="card-body">
                     <h2 class="h4">Manual override</h2>
                     <p class="text-secondary">Commands are limited to actuator devices and can be undone in reverse order.</p>
+                    <p class="small text-secondary">Simulation tip: open <strong>FARM-VALVE-01</strong> or turn on <strong>FARM-PUMP-01</strong> to resolve low moisture; turn off <strong>GRID-RELAY-01</strong> to resolve a power spike.</p>
 
                     <div class="mb-3">
                         <label class="form-label" for="overrideDevice">Actuator device</label>
@@ -303,6 +321,7 @@
     {
         try
         {
+            await SensorApi.RunSimulationTickAsync();
             registeredSensors = await SensorApi.GetSensorsAsync();
             liveTelemetry = await SensorApi.GetLiveCommandStreamAsync();
             activeAlerts = await SensorApi.GetAlertsAsync();
@@ -359,6 +378,25 @@
         selectedDeviceId = insight.DeviceId;
         await SensorApi.RecordDeviceSearchAsync(insight.DeviceId);
         await LoadSelectedHistoryAsync();
+    }
+
+    private async Task ApplySuggestedOverrideAsync(PredictiveInsight insight)
+    {
+        if (string.IsNullOrWhiteSpace(insight.RecommendedDeviceId) ||
+            string.IsNullOrWhiteSpace(insight.RecommendedCommand) ||
+            string.IsNullOrWhiteSpace(insight.RecommendedTargetState))
+        {
+            return;
+        }
+
+        newOverride = new ManualOverrideRequest
+        {
+            DeviceId = insight.RecommendedDeviceId,
+            Command = insight.RecommendedCommand,
+            TargetState = insight.RecommendedTargetState
+        };
+
+        await IssueOverrideAsync();
     }
 
     private async Task LoadSelectedHistoryAsync()

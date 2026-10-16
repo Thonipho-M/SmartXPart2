@@ -19,6 +19,7 @@ builder.Services.AddSingleton<SortedTelemetryHistoryStore>();
 builder.Services.AddSingleton<ManualOverrideCommandStore>();
 builder.Services.AddSingleton<OperatorActivityTracker>();
 builder.Services.AddSingleton<PredictiveRecommendationEngine>();
+builder.Services.AddSingleton<TelemetrySimulationState>();
 
 var app = builder.Build();
 
@@ -41,6 +42,7 @@ var sortedTelemetryHistory = app.Services.GetRequiredService<SortedTelemetryHist
 var manualOverrides = app.Services.GetRequiredService<ManualOverrideCommandStore>();
 var activityTracker = app.Services.GetRequiredService<OperatorActivityTracker>();
 var recommendationEngine = app.Services.GetRequiredService<PredictiveRecommendationEngine>();
+var telemetrySimulation = app.Services.GetRequiredService<TelemetrySimulationState>();
 
 // This list is temporary storage for Part 1. It is cleared when the API stops.
 var registeredSensors = new List<SensorProfile>();
@@ -194,16 +196,19 @@ liveDeviceRegistry.LoadExistingDevices(registeredSensors);
 foreach (var packet in floatTelemetry)
 {
     sortedTelemetryHistory.Add(packet);
+    commandStream.EnqueueTelemetry(packet);
 }
 
 foreach (var packet in integerTelemetry)
 {
     sortedTelemetryHistory.Add(packet);
+    commandStream.EnqueueTelemetry(packet);
 }
 
 foreach (var packet in booleanTelemetry)
 {
     sortedTelemetryHistory.Add(packet);
+    commandStream.EnqueueTelemetry(packet);
 }
 
 commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
@@ -215,6 +220,14 @@ commandStream.UpdateCriticalAlerts(TelemetryAlertEvaluator.Evaluate(
 
 var telemetry = app.MapGroup("/api/telemetry")
     .WithTags("Telemetry");
+
+app.MapPost("/api/simulation/tick", () =>
+{
+    RunSimulationTick();
+    return Results.Ok(new { message = "A new simulated telemetry batch was added to the command stream." });
+})
+.WithTags("Simulation")
+.WithName("RunTelemetrySimulationTick");
 
 // Validates a hierarchy such as Site > Greenhouse > Growing Bay using recursion.
 app.MapPost("/api/deployments/validate", (DeploymentConfiguration configuration) =>
@@ -309,6 +322,8 @@ commandStreamEndpoints.MapPost("/commands", (ManualOverrideRequest request) =>
 
     var issuedCommand = manualOverrides.Issue(request);
     activityTracker.RecordManualOverride(issuedCommand);
+    telemetrySimulation.ApplyManualOverride(issuedCommand);
+    RunSimulationTick();
     return Results.Created($"/api/command-stream/commands/{issuedCommand.CommandId}", issuedCommand);
 })
 .WithName("IssueManualOverride");
@@ -422,6 +437,62 @@ IResult StoreTelemetryPacket<T>(TelemetryPacket<T> packet, List<TelemetryPacket<
         DateTime.UtcNow));
 
     return Results.Created($"/api/telemetry/{packet.DeviceId}", packet);
+}
+
+void RunSimulationTick()
+{
+    var simulationTick = telemetrySimulation.NextTick();
+    var timestamp = DateTime.UtcNow;
+
+    StoreTelemetryPacket(new TelemetryPacket<float>
+    {
+        DeviceId = "FARM-MOIST-01",
+        MetricName = "Soil Moisture",
+        Value = simulationTick.SoilMoisture,
+        RecordedAtUtc = timestamp
+    }, floatTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<int>
+    {
+        DeviceId = "GRID-METER-01",
+        MetricName = "Power Usage Watts",
+        Value = simulationTick.PowerWatts,
+        RecordedAtUtc = timestamp
+    }, integerTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<float>
+    {
+        DeviceId = "FARM-PH-01",
+        MetricName = "Nutrient pH",
+        Value = simulationTick.NutrientPh,
+        RecordedAtUtc = timestamp
+    }, floatTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<float>
+    {
+        DeviceId = "GREENHOUSE-HUMID-01",
+        MetricName = "Humidity",
+        Value = simulationTick.Humidity,
+        RecordedAtUtc = timestamp
+    }, floatTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<bool>
+    {
+        DeviceId = "FARM-VALVE-01",
+        MetricName = "Valve Open",
+        Value = simulationTick.ValveOpen,
+        RecordedAtUtc = timestamp
+    }, booleanTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<bool>
+    {
+        DeviceId = "FARM-PUMP-01",
+        MetricName = "Pump Running",
+        Value = simulationTick.PumpRunning,
+        RecordedAtUtc = timestamp
+    }, booleanTelemetry);
+    StoreTelemetryPacket(new TelemetryPacket<bool>
+    {
+        DeviceId = "GRID-RELAY-01",
+        MetricName = "Relay Connected",
+        Value = simulationTick.RelayConnected,
+        RecordedAtUtc = timestamp
+    }, booleanTelemetry);
 }
 
 string CreateSafeFolderName(string deviceId)

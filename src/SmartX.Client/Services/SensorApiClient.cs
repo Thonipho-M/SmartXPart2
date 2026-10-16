@@ -59,6 +59,11 @@ public class SensorApiClient(HttpClient httpClient)
         return httpClient.PostAsync($"api/recommendations/searches/{Uri.EscapeDataString(deviceId)}", null);
     }
 
+    public Task<HttpResponseMessage> RunSimulationTickAsync()
+    {
+        return httpClient.PostAsync("api/simulation/tick", null);
+    }
+
     public async Task<List<CommandStreamTelemetry>> GetSortedCommandHistoryAsync(string deviceId)
     {
         return await httpClient.GetFromJsonAsync<List<CommandStreamTelemetry>>(
