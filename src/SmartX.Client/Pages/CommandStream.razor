@@ -142,6 +142,43 @@
         </div>
     </div>
 
+    <section class="card shadow-sm mt-4 border-success">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
+                <div>
+                    <h2 class="h4 mb-1">Automated Insights</h2>
+                    <p class="text-secondary mb-0">Recommendations are based on active telemetry risks and recorded operator follow-up patterns.</p>
+                </div>
+                <span class="badge text-bg-success">@predictiveInsights.Count suggestions</span>
+            </div>
+
+            @if (predictiveInsights.Count == 0)
+            {
+                <p class="text-secondary mb-0">No action is currently recommended.</p>
+            }
+            else
+            {
+                <div class="row row-cols-1 row-cols-lg-2 g-3">
+                    @foreach (var insight in predictiveInsights)
+                    {
+                        <div class="col">
+                            <article class="border rounded p-3 h-100">
+                                <div class="d-flex justify-content-between gap-2 mb-2">
+                                    <strong>@insight.Title</strong>
+                                    <span class="badge @(insight.Confidence == "High" ? "text-bg-danger" : "text-bg-info")">@insight.Confidence</span>
+                                </div>
+                                <p class="mb-2">@insight.Message</p>
+                                <p class="mb-2"><strong>Suggested action:</strong> @insight.SuggestedAction</p>
+                                <p class="small text-secondary mb-3"><strong>Evidence:</strong> @insight.Evidence</p>
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => InvestigateInsightAsync(insight)">Review device</button>
+                            </article>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </section>
+
     <div class="row g-4 mt-1">
         <div class="col-lg-5">
             <section class="card shadow-sm h-100">
@@ -237,6 +274,7 @@
     private List<CommandStreamTelemetry> liveTelemetry = [];
     private List<TelemetryAlert> activeAlerts = [];
     private List<TelemetryAlert> criticalAlerts = [];
+    private List<PredictiveInsight> predictiveInsights = [];
     private List<ManualOverrideCommand> overrideHistory = [];
     private List<CommandStreamTelemetry> selectedHistory = [];
     private ManualOverrideRequest newOverride = new() { Command = "Open valve", TargetState = "On" };
@@ -269,6 +307,7 @@
             liveTelemetry = await SensorApi.GetLiveCommandStreamAsync();
             activeAlerts = await SensorApi.GetAlertsAsync();
             criticalAlerts = await SensorApi.GetPriorityCriticalAlertsAsync();
+            predictiveInsights = await SensorApi.GetPredictiveInsightsAsync();
             overrideHistory = await SensorApi.GetManualOverrideHistoryAsync();
 
             if (string.IsNullOrWhiteSpace(selectedDeviceId) && registeredSensors.Count > 0)
@@ -311,6 +350,14 @@
     private async Task SelectDeviceAsync(string deviceId)
     {
         selectedDeviceId = deviceId;
+        await SensorApi.RecordDeviceSearchAsync(deviceId);
+        await LoadSelectedHistoryAsync();
+    }
+
+    private async Task InvestigateInsightAsync(PredictiveInsight insight)
+    {
+        selectedDeviceId = insight.DeviceId;
+        await SensorApi.RecordDeviceSearchAsync(insight.DeviceId);
         await LoadSelectedHistoryAsync();
     }
 
